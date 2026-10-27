@@ -2,21 +2,10 @@
 # User-local ROS middleware and official messages; no sudo or simulator install.
 set -eo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-source /etc/os-release
-if [[ "$ID" != ubuntu || "$VERSION_ID" != 22.04 || "$(dpkg --print-architecture)" != amd64 ]]; then
-    echo 'This pinned local middleware setup targets Ubuntu 22.04 amd64 / ROS 2 Humble.' >&2
-    exit 1
-fi
 if [[ ! -f /opt/ros/humble/setup.bash ]]; then
     echo 'ROS 2 Humble is required; see scripts/install_g1_nav_deps.sh.' >&2
     exit 1
 fi
-for program in git colcon cmake; do
-    if ! command -v "$program" >/dev/null; then
-        echo "Missing $program; run scripts/install_g1_nav_deps.sh first." >&2
-        exit 1
-    fi
-done
 if [[ ! -x .venv-g1-nav/bin/python ]]; then
     /usr/bin/python3 -m venv --system-site-packages --without-pip .venv-g1-nav
 fi

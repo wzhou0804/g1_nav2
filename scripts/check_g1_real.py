@@ -29,7 +29,7 @@ from unitree_api.msg import Request
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--seconds', type=float, default=12)
-    p.add_argument('--output', type=Path, default=Path('.cache-g1/validation/stationary/report.json'))
+    p.add_argument('--output', type=Path, default=Path('docs/g1_real_navigation_validation.json'))
     args = p.parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     rclpy.init()
@@ -150,7 +150,8 @@ def main():
         and report.get('bridge', {}).get('cloud_time_valid', False)
         and report.get('bridge', {}).get('sensors_ready', False)
         and report.get('bridge', {}).get('mode_machine') == 6
-        and report.get('bridge', {}).get('counts', {}).get('ack_7001', 0) > 0
+        and (report.get('bridge', {}).get('locomotion', 'factory') == 'homie' or
+             report.get('bridge', {}).get('counts', {}).get('ack_7001', 0) > 0)
         and report.get('bridge', {}).get('counts', {}).get('rpc_7105', 0) == 0
         and rpc_ids.get('7105', 0) == 0)
     args.output.parent.mkdir(parents=True, exist_ok=True)

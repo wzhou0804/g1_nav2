@@ -1,4 +1,4 @@
-"""Real sensors -> TF/SLAM/Nav2; guarded Twist -> official sport API 7105.
+"""Real sensors -> TF/SLAM/Nav2; gated velocity -> factory service or OpenHomie.
 
 Never publishes LowCmd, changes FSM, releases controllers or activates a locomotion mode.
 All outgoing RPCs are GET 7001 unless explicit motion permission AND arming.
@@ -26,6 +26,8 @@ from unitree_hg.msg import LowState
 from visualization_msgs.msg import Marker
 
 from navigation.real_g1_core import RobotClock, VelocityGate
+from navigation.homie_nav2_transport import HomieNavClient
+from navigation.odom_velocity import body_twist_to_yaw
 
 
 def ns(stamp):
@@ -59,6 +61,19 @@ class RealG1Bridge(Node):
     def __init__(self):
         super().__init__('real_bridge', namespace='g1_real')
         self.declare_parameter('allow_motion', False)
+        self.declare_parameter('locomotion', 'factory')
+        self.declare_parameter('homie_port', 17651)
+        self.locomotion = self.get_parameter('locomotion').value
+        if self.locomotion not in ('factory', 'homie'):
+            raise ValueError('locomotion must be factory or homie')
+        self.homie = (HomieNavClient(self.get_parameter('homie_port').value)
+                      if self.locomotion == 'homie' else None)
+        self.homie_was_active = False
+        self.measured_velocity = None
+        self.measurement_stamp = None
+        self.velocity_source_ns = 0
+        self.last_disarm = None
+        self.last_sent_velocity = (0., 0., 0.)
         # Explicit compatibility with the factory FSMs used on this robot.
         # This allowlist does not change the robot's FSM or validate its gait.
         self.declare_parameter('allowed_fsm_ids', [500, 801])
@@ -89,8 +104,10 @@ class RealG1Bridge(Node):
         self.imu_pub = self.create_publisher(Imu, 'imu', qos_profile_sensor_data)
         self.status_pub = self.create_publisher(String, 'status', 1)
         self.marker_pub = self.create_publisher(Marker, 'state_marker', 1)
-        self.rpc_pub = self.create_publisher(Request, '/api/sport/request', 10)
-        self.create_subscription(Response, '/api/sport/response', self.on_response, 20)
+        self.rpc_pub = None
+        if self.locomotion == 'factory':
+            self.rpc_pub = self.create_publisher(Request, '/api/sport/request', 10)
+            self.create_subscription(Response, '/api/sport/response', self.on_response, 20)
         self.create_subscription(Odometry, '/dog_odom', self.on_odom, qos_profile_sensor_data)
         self.create_subscription(PointCloud2, '/utlidar/cloud_livox_mid360', self.on_cloud, qos_profile_sensor_data)
         self.create_subscription(Imu, '/utlidar/imu_livox_mid360', self.on_imu, qos_profile_sensor_data)
@@ -100,8 +117,9 @@ class RealG1Bridge(Node):
         self.cancel_client = self.create_client(CancelGoal, '/g1_real/navigate_to_pose/_action/cancel_goal')
         self.create_timer(1.0, self.status)
         self.create_timer(0.1, self.control)
-        self.create_timer(0.5, lambda: self.rpc(7001, {}))
-        self.get_logger().info('Original controller retained. Motion DISARMED. No FSM changes or LowCmd.')
+        if self.locomotion == 'factory':
+            self.create_timer(0.5, lambda: self.rpc(7001, {}))
+        self.get_logger().info(f'Velocity destination: {self.locomotion}. Motion DISARMED. No FSM changes or LowCmd from this bridge.')
 
     def record(self, name):
         self.seen[name] = time.monotonic()
@@ -111,9 +129,29 @@ class RealG1Bridge(Node):
         return time.monotonic() - self.seen.get(name, -math.inf)
 
     def healthy(self):
+        if self.homie is not None:
+            return self.homie_health_reason() is None
         return (self.mode == 6 and self.sensors_ready() and not self.rpc_fault
                 and self.age('fsm') < 1.5
                 and self.fsm in self.get_parameter('allowed_fsm_ids').value)
+
+    def homie_health_reason(self):
+        if self.mode != 6:
+            return f'mode_machine={self.mode}, expected 6'
+        if not self.sensors_ready():
+            return (f'sensors unavailable: odom_age={self.age("odom"):.3f}s, '
+                    f'cloud_age={self.age("cloud"):.3f}s, lowstate_age={self.age("lowstate"):.3f}s, '
+                    f'cloud_time_valid={self.cloud_time_valid}, clock_fault={self.clock_bridge.fault}')
+        if not self.homie.ready():
+            return (f'OpenHomie unavailable: phase={self.homie.status.get("phase")}, '
+                    f'ready={self.homie.status.get("ready")}, '
+                    f'ack_age={time.monotonic()-self.homie.last_ack:.3f}s')
+        return None
+
+    def record_disarm(self, was_armed):
+        if was_armed and not self.gate.armed:
+            self.last_disarm = {'host_monotonic': time.monotonic(), 'reason': self.gate.reason}
+            self.get_logger().warning('Motion DISARMED: '+self.gate.reason)
 
     def sensors_ready(self):
         return (not self.clock_bridge.fault and self.clock_bridge.offset_ns is not None
@@ -129,6 +167,20 @@ class RealG1Bridge(Node):
         self.clock_bridge.observe(robot_ns, self.get_clock().now().nanoseconds)
         self.record('odom')
         when = self.clock_bridge.convert(robot_ns)
+        # Use the existing robot_center/body twist, projected into the same
+        # gravity-aligned heading frame as the MuJoCo feedback measurement.
+        # Duplicate source timestamps must not refresh feedback freshness.
+        if self.homie is not None and when is not None and robot_ns > self.velocity_source_ns:
+            self.velocity_source_ns = robot_ns
+            twist, q = msg.twist.twist, msg.pose.pose.orientation
+            try:
+                self.measured_velocity = body_twist_to_yaw(
+                    (q.x, q.y, q.z, q.w),
+                    (twist.linear.x, twist.linear.y, twist.linear.z),
+                    (twist.angular.x, twist.angular.y, twist.angular.z))
+                self.measurement_stamp = time.monotonic()
+            except ValueError:
+                self.measured_velocity = self.measurement_stamp = None
         if when is None or robot_ns - self.last_tf < 20_000_000:
             return
         pos, orientation = msg.pose.pose.position, msg.pose.pose.orientation
@@ -179,6 +231,8 @@ class RealG1Bridge(Node):
             self.imu_pub.publish(msg)  # IMU extrinsic uncalibrated; not used by SLAM.
 
     def rpc(self, api, parameters):
+        if self.rpc_pub is None:
+            raise RuntimeError('Factory RPC is disabled for OpenHomie locomotion')
         assert api in (7001, 7105), 'Only GET_FSM_ID and SET_VELOCITY are allowed'
         msg = Request()
         msg.header.identity.id = time.monotonic_ns()
@@ -213,7 +267,10 @@ class RealG1Bridge(Node):
         if not request.data:
             was_armed = self.gate.armed
             self.gate.disarm('operator disarmed')
-            if was_armed:
+            self.record_disarm(was_armed)
+            if self.homie is not None:
+                self.homie.send(enabled=False)
+            elif was_armed:
                 self.rpc(7105, {'velocity': [0.0, 0.0, 0.0], 'duration': 0.25})
             cancelling = self.cancel_client.service_is_ready()
             if cancelling:
@@ -226,6 +283,7 @@ class RealG1Bridge(Node):
             response.success = self.gate.arm(self.healthy(), time.monotonic())
             response.message = ('Armed; awaiting a new command' if response.success else
                 f'Rejected: allow_motion={self.gate.permitted}, mode_machine={self.mode}, '
+                f'locomotion={self.locomotion}, policy_ready={self.homie.ready() if self.homie else None}, '
                 f'sensors_ready={self.sensors_ready()}, fsm={self.fsm}, '
                 f'allowed_fsm_ids={self.get_parameter("allowed_fsm_ids").value}, '
                 f'fsm_age_s={self.age("fsm"):.3f}, rpc_fault={self.rpc_fault}')
@@ -240,6 +298,25 @@ class RealG1Bridge(Node):
 
     def control(self):
         now = time.monotonic()
+        if self.homie is not None:
+            self.homie.poll()
+            was_armed = self.gate.armed
+            health_reason = self.homie_health_reason()
+            if self.gate.armed and health_reason is not None:
+                self.gate.disarm(health_reason)
+            active = self.homie.status.get('active') is True
+            if active and not self.homie_was_active and self.gate.armed:
+                self.gate.arm(self.healthy(), now)
+            self.homie_was_active = active
+            velocity = self.gate.step(now, self.healthy())
+            self.last_sent_velocity = velocity if active and velocity is not None else (0., 0., 0.)
+            self.record_disarm(was_armed)
+            self.homie.send(self.last_sent_velocity,
+                            enabled=self.gate.armed, measured_velocity=self.measured_velocity,
+                            measurement_stamp=self.measurement_stamp,
+                            stop_immediately=self.gate.reason=='command watchdog: stop')
+            self.count['homie_packets'] += 1
+            return
         for identity, (api, sent) in list(self.pending.items()):
             if now - sent > 0.6:
                 self.pending.pop(identity, None)
@@ -251,8 +328,16 @@ class RealG1Bridge(Node):
 
     def status(self):
         data = {'motion_permitted': self.gate.permitted, 'armed': self.gate.armed,
+                'locomotion': self.locomotion,
+                'homie_status': None if self.homie is None else self.homie.status,
+                'homie_measured_velocity': self.measured_velocity,
+                'homie_velocity_source': '/dog_odom twist: body -> heading',
                 'sensors_ready': self.sensors_ready(), 'motion_ready': self.healthy(),
                 'motion_reason': self.gate.reason, 'mode_machine': self.mode, 'fsm': self.fsm,
+                'last_disarm': self.last_disarm,
+                'nav_command_velocity': self.gate.command,
+                'homie_sent_velocity': self.last_sent_velocity,
+                'nav_command_age_seconds': round(self.age('nav_commands'), 3) if 'nav_commands' in self.seen else None,
                 'allowed_fsm_ids': self.get_parameter('allowed_fsm_ids').value,
                 'clock_offset_seconds': None if self.clock_bridge.offset_ns is None else self.clock_bridge.offset_ns/1e9,
                 'clock_fault': self.clock_bridge.fault, 'rpc_fault': self.rpc_fault,
@@ -285,6 +370,11 @@ class RealG1Bridge(Node):
             marker.text = 'MAPPING LIVE\n' + ('MOTION ENABLED' if self.gate.armed else 'MOTION DISABLED')
         self.marker_pub.publish(marker)
 
+    def destroy_node(self):
+        if self.homie is not None:
+            self.homie.close()
+        return super().destroy_node()
+
 
 def main():
     rclpy.init()
@@ -294,7 +384,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        if node.gate.armed and rclpy.ok():
+        if node.gate.armed and node.homie is None and rclpy.ok():
             node.rpc(7105, {'velocity': [0.0, 0.0, 0.0], 'duration': 0.25})
         node.destroy_node()
         if rclpy.ok():

@@ -10,6 +10,7 @@ from pathlib import Path
 import sys
 import time
 import unittest
+from unittest.mock import patch
 
 os.environ['ROS_DOMAIN_ID'] = '119'
 os.environ['CYCLONEDDS_URI'] = (
@@ -33,6 +34,7 @@ from unitree_api.msg import Request, Response
 from unitree_hg.msg import LowState
 
 from navigation.real_g1 import RealG1Bridge
+from navigation.homie_nav2_transport import HomieNavCommands
 
 
 class FactoryNavigation(unittest.TestCase):
@@ -161,6 +163,157 @@ class FactoryNavigation(unittest.TestCase):
         finally:
             executor.shutdown()
             bridge.destroy_node()
+            peer.destroy_node()
+            rclpy.shutdown()
+
+
+class HomieNavigation(unittest.TestCase):
+    def test_feedback_uses_body_twist_and_does_not_refresh_duplicate_source_samples(self):
+        worker = HomieNavCommands(0, require_feedback=True)
+        rclpy.init(args=['--ros-args', '-p', 'locomotion:=homie', '-p', f'homie_port:={worker.port}'])
+        bridge = RealG1Bridge()
+        try:
+            odom = Odometry()
+            odom.header.stamp = bridge.get_clock().now().to_msg()
+            odom.child_frame_id = 'robot_center'
+            odom.pose.pose.orientation.z = odom.pose.pose.orientation.w = 2**-.5
+            odom.twist.twist.linear.x, odom.twist.twist.linear.y = .1, -.02
+            odom.twist.twist.angular.z = .15
+            bridge.on_odom(odom)
+            for actual, expected in zip(bridge.measured_velocity, (.1, -.02, .15)):
+                self.assertAlmostEqual(actual, expected)
+            bridge.control()
+            worker.poll(active=True, ready=True)
+            self.assertIsNotNone(worker.measured_velocity())
+            bridge.measurement_stamp -= 1.
+            original = bridge.measurement_stamp
+            bridge.on_odom(odom)
+            self.assertEqual(bridge.measurement_stamp, original)
+            bridge.control()
+            worker.poll(active=True, ready=True)
+            self.assertIsNone(worker.measured_velocity())
+            self.assertEqual(worker.command, (0., 0., 0.))
+            odom.header.stamp = bridge.get_clock().now().to_msg()
+            odom.twist.twist.linear.x = float('nan')
+            bridge.on_odom(odom)
+            self.assertIsNone(bridge.measured_velocity)
+        finally:
+            bridge.destroy_node()
+            worker.close()
+            rclpy.shutdown()
+
+    def test_same_service_and_velocity_gate_without_factory_velocity_rpc(self):
+        worker = HomieNavCommands(0, require_feedback=True)
+        rclpy.init(args=['--ros-args', '-p', 'allow_motion:=true',
+                        '-p', 'locomotion:=homie', '-p', f'homie_port:={worker.port}'])
+        bridge = RealG1Bridge()
+        peer = Node('fake_homie_sensors_and_nav2')
+        executor = SingleThreadedExecutor()
+        executor.add_node(bridge)
+        executor.add_node(peer)
+        requests, cancellations, commands = [], [], []
+        peer.create_subscription(Request, '/api/sport/request', requests.append, 10)
+
+        def cancel(request, response):
+            cancellations.append(request)
+            return response
+
+        peer.create_service(CancelGoal, '/g1_real/navigate_to_pose/_action/cancel_goal', cancel)
+        arm_client = peer.create_client(SetBool, '/g1_real/enable_motion')
+        odom_pub = peer.create_publisher(Odometry, '/dog_odom', qos_profile_sensor_data)
+        cloud_pub = peer.create_publisher(PointCloud2, '/utlidar/cloud_livox_mid360', qos_profile_sensor_data)
+        low_pub = peer.create_publisher(LowState, '/lowstate', qos_profile_sensor_data)
+        command_pub = peer.create_publisher(Twist, '/g1_real/cmd_vel', 1)
+        ready, active = False, False
+
+        def pump(seconds, command=False, sensors=True):
+            deadline = time.monotonic() + seconds
+            while time.monotonic() < deadline:
+                if sensors:
+                    odom = Odometry()
+                    odom.header.stamp = peer.get_clock().now().to_msg()
+                    odom.pose.pose.position.z = 0.8
+                    odom.pose.pose.orientation.w = 1.
+                    odom_pub.publish(odom)
+                    cloud = PointCloud2()
+                    cloud.header.stamp = odom.header.stamp
+                    cloud_pub.publish(cloud)
+                    low = LowState()
+                    low.mode_machine = 6
+                    low_pub.publish(low)
+                if command:
+                    twist = Twist()
+                    twist.linear.x, twist.linear.y, twist.angular.z = .1, .02, .1
+                    command_pub.publish(twist)
+                worker.poll(ready=ready, active=active,
+                            phase='homie_active' if active else 'waiting_nav2_enable')
+                commands.append(worker.command)
+                executor.spin_once(timeout_sec=.01)
+
+        def set_armed(value):
+            future = arm_client.call_async(SetBool.Request(data=value))
+            deadline = time.monotonic() + 2
+            while not future.done() and time.monotonic() < deadline:
+                pump(.02)
+            self.assertTrue(future.done())
+            return future.result()
+
+        try:
+            pump(.5)
+            self.assertFalse(set_armed(True).success)
+            ready = True
+            pump(.3, command=True)
+            self.assertTrue(bridge.healthy())
+            self.assertEqual(worker.measured_velocity(), (0., 0., 0.))
+            self.assertIsNone(bridge.fsm)  # Low-level ownership does not use factory FSMs.
+            self.assertTrue(set_armed(True).success)
+            pump(.3, command=True)
+            self.assertTrue(worker.requested)
+            self.assertFalse(worker.enabled)
+            self.assertTrue(all(v == (0., 0., 0.) for v in commands))
+            active = True
+            pump(.2)
+            self.assertEqual(worker.command, (0., 0., 0.))
+            pump(.4, command=True)
+            self.assertGreater(worker.command[0], 0)
+            self.assertLessEqual(worker.command[0], bridge.gate.limits[0])
+            self.assertTrue(set_armed(False).success)
+            pump(.2, command=True)
+            self.assertFalse(worker.enabled)
+            self.assertEqual(worker.command, (0., 0., 0.))
+            self.assertEqual(len(cancellations), 1)
+            self.assertTrue(set_armed(True).success)
+            pump(.3, command=True)
+            self.assertGreater(worker.command[0], 0)
+            pump(.6)  # Existing Nav2 command timeout still requests zero velocity.
+            self.assertEqual(worker.command, (0., 0., 0.))
+            self.assertTrue(worker.stop_immediately)
+            self.assertTrue(bridge.gate.armed)
+            bridge.homie.last_ack -= .7  # Reproduce the old SDK constructor's response gap.
+            with patch.object(bridge.homie,'poll'):
+                bridge.control()
+            self.assertFalse(bridge.gate.armed)
+            self.assertIn('ack_age=',bridge.last_disarm['reason'])
+            self.assertIn('OpenHomie unavailable',bridge.last_disarm['reason'])
+            first_disarm=bridge.last_disarm.copy()
+            pump(.3)
+            self.assertTrue(bridge.healthy())
+            self.assertFalse(bridge.gate.armed)  # Link recovery never silently re-arms.
+            self.assertEqual(bridge.last_disarm,first_disarm)
+            self.assertTrue(set_armed(True).success)
+            pump(.3,command=True)
+            self.assertGreater(worker.command[0],0)
+            pump(.7, command=True, sensors=False)
+            self.assertFalse(bridge.gate.armed)
+            self.assertEqual(worker.command, (0., 0., 0.))
+            self.assertIn('sensors unavailable',bridge.last_disarm['reason'])
+            self.assertEqual(requests, [])
+        finally:
+            executor.shutdown()
+            bridge.destroy_node()
+            worker.poll(active=active, ready=ready)
+            self.assertFalse(worker.requested)
+            worker.close()
             peer.destroy_node()
             rclpy.shutdown()
 

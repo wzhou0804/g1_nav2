@@ -27,7 +27,7 @@ class Guards(unittest.TestCase):
         gate = VelocityGate(permitted=True)
         gate.arm(True, 10)
         gate.update((100., -100., 100.), 10)
-        self.assertEqual(gate.command, (.15, -.06, .25))
+        self.assertEqual(gate.command, (.3, -.15, .3))
         for actual, expected in zip(gate.step(10.1, True), (.02, -.015, .04)):
             self.assertAlmostEqual(actual, expected)
         self.assertEqual(gate.step(10.36, True), (0., 0., 0.))

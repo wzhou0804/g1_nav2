@@ -8,8 +8,9 @@ fi
 sudo apt-get update
 sudo apt-get install --no-install-recommends \
     build-essential cmake git iproute2 util-linux \
-    python3-venv python3-colcon-common-extensions python3-yaml python3-numpy python3-pil \
+    python3-venv python3-pip python3-colcon-common-extensions python3-yaml python3-numpy python3-pil \
     python3-empy python3-lark python3-catkin-pkg \
+    libgl1 libglfw3 libegl1 \
     ros-humble-navigation2 ros-humble-nav2-bringup \
     ros-humble-slam-toolbox ros-humble-pointcloud-to-laserscan \
-    ros-humble-rviz2
+    ros-humble-nav2-simple-commander ros-humble-rviz2

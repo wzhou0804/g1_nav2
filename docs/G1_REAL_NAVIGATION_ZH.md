@@ -1,150 +1,96 @@
-# G1 实机建图与原厂步态导航
+# G1 实机导航操作
 
-本仓库保留现场跑通的原厂步态导航链路。安装与常用命令见 [README](../README.md)。
-启动入口是 `./run_g1_real.sh`，从仓库根目录执行，自动加载实机 ROS 环境。
+从 [README](../README.md) 完成安装、网卡配置后，在仓库根目录运行所有命令。
+当前主线使用原机 MID360、`/dog_odom`、`/lowstate`，不使用相机或仿真真值。
 
-## 模式与操作
+## 模式与启动现象
 
-| 启动命令 | RViz 的 2D Goal Pose | 速度输出 |
-| --- | --- | --- |
-| `./run_g1_real.sh` | 只规划预览 | 禁止 |
-| `./run_g1_real.sh allow_motion:=true goal_mode:=navigate` | 执行 NavigateToPose | 还需手动放行 |
-| 上述命令加 `rviz:=false` | 无 RViz 界面 | 与所选模式一致 |
+G1 `mode_machine=6` 是锁腰 27 自由度机型的通信标识，不是遥控器需要切入的“模式 6”。
+腰 roll/pitch 已机械固定，腰 yaw 和双臂保持 OpenHomie 默认零位关节目标。
 
-已有入口时先退出旧入口；工作区运行锁阻止同目录重复启动。
-不要同时从其他工作区启动另一套速度桥或低层控制程序。
+```bash
+./run_g1_real.sh allow_motion:=true goal_mode:=navigate
+```
 
-执行模式下另开终端：
+| 日志阶段 | 行为 |
+| --- | --- |
+| `waiting_lowstate / preflight_shadow` | 接收状态、检查数据、只读推理预热 |
+| `waiting_nav2_enable` | 等待服务放行，原厂控制仍保留 |
+| `checking_original_mode / releasing_original_mode` | 放行后检查并释放原厂运动控制；已处于调试空模式时不重复释放 |
+| `moving_to_default` | 按关节位移平滑进入默认姿态，双臂也会过渡 |
+| `homie_active` | 策略已运行，可在 RViz 选点 |
+| `exit_damping` | 策略退出，停止位置保持，不自动恢复原厂控制 |
+
+服务操作：
 
 ```bash
 source scripts/activate_g1_real.sh
-cat .cache-g1/real-runtime/status.json
 ros2 service call /g1_real/enable_motion std_srvs/srv/SetBool "{data: true}"
-```
-
-只有状态新鲜且服务返回 `success: true` 后才发送执行目标。
-RViz 的 Fixed Frame 为 `g1_real/map`；点击 **2D Goal Pose**，
-在已知空闲区域按下鼠标并拖出朝向后松开。先用附近小目标验证方向、避障和停止。
-不要在放行前预先发送执行目标，避免放行后继续跟踪未结束的旧目标。
-
-解除放行会立即阻止后续速度，原先已放行时发送零速，并请求取消所有 NavigateToPose 目标：
-
-```bash
+# 停止行走、取消当前目标，策略继续运行
 ros2 service call /g1_real/enable_motion std_srvs/srv/SetBool "{data: false}"
 ```
 
-取消服务不可用时桥仍保持禁止输出，响应会报告取消服务不可用。
-重新放行前确认旧目标已结束，再选择新目标。现场紧急停止使用已确认有效的原厂遥控器停止方式。
-正常完成后 Ctrl+C，或执行 `./run_g1_real.sh --stop`。
+Nav2 模式不需要 L1+Start / L1+A；启动遥控器控制的独立策略入口时才使用该握手。
+未放行时可用原厂遥控器建图。地图使用在线 SLAM；当前没有单独 AMCL 定位入口。
+RViz Fixed Frame 为 `g1_real/map`，执行目标使用 **2D Goal Pose**。
 
-## 话题与接口
-
-| 输入／输出 | 类型／用途 |
-| --- | --- |
-| `/utlidar/cloud_livox_mid360` | 原机 MID360 点云 |
-| `/utlidar/imu_livox_mid360` | 雷达 IMU，只转发，未额外融合到 SLAM |
-| `/dog_odom` | 原机状态估计里程计 |
-| `/lowstate` | `unitree_hg/LowState`，机型和腰 yaw |
-| `/g1_real/points`、`/g1_real/scan` | 校时后的点云和二维导航切片 |
-| `/g1_real/map`、`/g1_real/odom` | SLAM 地图和转发里程计 |
-| `/g1_real/preview_goal` | 只请求 ComputePathToPose |
-| `/g1_real/goal_pose` | Nav2 NavigateToPose 执行目标 |
-| `/g1_real/cmd_vel_nav` → `/g1_real/cmd_vel` | Nav2 速度经平滑后进入桥 |
-| `/api/sport/request`、`/api/sport/response` | 原厂状态查询／速度 RPC |
-| `/g1_real/status` | JSON 状态，同时保存为 `.cache-g1/real-runtime/status.json` |
-
-桥遵循官方 [G1 LocoClient](https://github.com/unitreerobotics/unitree_sdk2_python/blob/814556d15970dd2ecf1c9984e845ca02ab07e206/unitree_sdk2py/g1/loco/g1_loco_client.py)
-的协议，仅实现 GET_FSM_ID **7001** 和 SET_VELOCITY **7105**。
-速度格式为 `{"velocity":[vx,vy,wz],"duration":0.25}`。
-没有 LowCmd、Start、ReleaseMode 或自动原厂模式恢复操作。
-RViz 执行模式使用 Nav2 Humble 内置的
-[`goal_pose` → NavigateToPose 订阅](https://api.nav2.org/nav2-humble/html/navigate__to__pose_8cpp_source.html)。
-
-## 放行条件与速度
-
-放行要求：启动参数允许运动、机型 `mode_machine=6`、传感器及 FSM 数据新鲜、
-FSM 在 `[500, 801]` 内、无时间／速度 RPC 故障。
-500 来自官方 Start 实现；801 按现场固件读数和使用者要求兼容。
-允许列表和数据新鲜度检查属于本项目集成逻辑，不是固件内置阈值。
-当前现场到点成功时读数为 500；801 已完成门控回归测试。
-可通过桥的 ROS 参数 `allowed_fsm_ids` 显式配置，桥不会改变机器人 FSM。
-
-| 参数 | 值 |
-| --- | --- |
-| 前向／横向／角速度上限 | 0.15 m/s、0.06 m/s、0.25 rad/s |
-| 速度变化率 | 0.20 m/s²、0.15 m/s²、0.40 rad/s² |
-| 指令看门狗 | 0.35 s；超时输出零速 |
-| 原厂速度请求 | 10 Hz；每条 duration=0.25 s |
-| 传感器／FSM 断流、速度 RPC 故障 | 零速并解除放行；恢复后不会自动继续 |
-
-Nav2 禁止规划穿越未知区，行为树不执行自动旋转或倒退恢复。
-本地地图覆盖范围不等于可通行范围；先确认地图、地面和机器人位姿一致。
-速度请求是否被接受看 RPC 回复，到点结果看 Nav2 的 NavigateToPose 状态。
-
-## 坐标与时间
-
-TF 链为 `g1_real/map → odom → base_footprint → base_link → waist_yaw → torso → lidar`。
-使用官方锁腰 27 自由度 G1 名义 URDF 参数；腰 yaw 来自电机槽位 12。
-torso 到雷达平移 `[0.0002835, 0.00003, 0.428434]` m，RPY `[π, 0.05112069, 0]`。
-现场仍需核对 `/dog_odom` 的 robot_center 与 pelvis、地面高度及雷达实际安装外参。
-桥提供 `odom_to_pelvis_z_offset`、`lidar_xyz`、`lidar_pitch` ROS 参数用于校正。
-
-第一帧原机里程计建立固定时间偏移；点云和里程计共用偏移，保留传感器时间差，
-并未实现 PTP/NTP。时间跳变或漂移会锁定故障，需要显式重启建立新映射。
-全部节点使用墙钟，`use_sim_time=false`。
-
-二维导航切片取地面以上 0.25–1.8 m、距离 0.5–20 m。
-低障碍、负障碍和楼梯不在当前切片检测保证内。
-IMU 外参未校准，该转发数据不参与 SLAM。
-
-## 常见问题
-
-**地址丢失／Address already assigned：**
-`ip -brief -4 address` 检查实际接线网卡。用以下命令添加电脑端附加地址，先替换网卡名称：
+## 原厂执行端
 
 ```bash
-nmcli device modify <robot-interface> +ipv4.addresses 192.168.123.222/24
+./run_g1_real.sh locomotion:=factory allow_motion:=true goal_mode:=navigate
 ```
 
-地址已存在时无需重复添加；临时地址可能在断线、重启后丢失。
-入口使用系统 `awk` 精确匹配地址，无需安装 ripgrep。
+其雷达、里程计、SLAM、Nav2 与服务接口相同，速度经官方 API 7105 下发。
+原厂 FSM 支持当前已测试的 500 / 801；不会替操作员切换模式。此前运行低层策略时，先按官方流程恢复原厂控制。
 
-**`sensors_ready=true`、`fsm=null`：**
-表示没有有效 FSM 回复，不等于 FSM 0。检查服务端：
+## 速度与反馈
+
+| 项目 | 当前值 |
+| --- | --- |
+| 前进目标上限 | 0.30 m/s |
+| 横移目标范围 | ±0.15 m/s |
+| 转向目标范围 | ±0.30 rad/s |
+| 合成平移目标上限 | 0.30 m/s |
+| 前进／横移／转向加减速度 | 0.2 / 0.15 / 0.4 |
+| 补偿后策略输入范围 | ±[0.6, 0.6, 0.6] |
+| 转向前馈 | 0.4 rad/s |
+| Nav2 链路 / 策略推理 / LowCmd | 10 / 50 / 500 Hz |
+
+目标上限需同时修改 `g1_real_navigation.launch.py` 中 DWB、velocity_smoother 与 `real_g1_core.py` 的速度门。
+补偿输入范围在 `scripts/deploy_g1_student.py`，与机器人目标速度分别配置。
+反馈来自原机 `/dog_odom` 的机体速度，按姿态投影到水平朝向坐标系；不修改 SLAM 使用的里程计。
+普通到点停车逐步减速；解除放行、通信失效或指令看门狗触发时立即送零。
+修改配置后重新启动生效。
+
+## 状态与排错
+
+```bash
+cat .cache-g1/real-runtime/status.json
+cat .cache-g1/homie-deploy/nav2/status.json
+tail -n 1 .cache-g1/homie-deploy/nav2/telemetry.jsonl
+```
+
+- `armed=false`：尚未服务放行，或发生通信／传感器故障后取消放行。恢复后显式重新放行。
+- `motion_ready=false`：查看 `motion_reason`、`homie_status.phase` 与 `last_disarm`。
+- `OpenHomie unavailable / ack_age`：本机策略应答超过 0.6 秒。先看策略是否已经退出及其 `reason`。
+- `LowState stale or missing`：100 ms 内没有有效新 tick。查看 `lowstate_receive_at_stop` 中的
+  `last_message_age_ms` 与 `unique_tick_age_ms`；前者变大是接收空档，只有后者变大是重复 tick。
+- `No valid trajectories / Failed to make progress`：局部控制器无法得到可执行轨迹或实际运动不足，
+  检查障碍、地图与里程计，并对照 `desired_velocity / measured_velocity / policy_velocity`。
+- `Address already assigned`：已有电脑端地址，无需重复添加。
+
+SDK LowState 使用独立线程与持久 WaitSet 持续读取，保留 CRC、tick、机型与有效性检查。
+自定义 50 ms 推理退出、100 ms 策略目标年龄退出、倾角／温度阈值和 PD 预算投影已在开发中移除。
+LowState 100 ms、Nav2 指令 0.35 s、里程计 0.5 s、策略应答 0.6 s 属于当前接入逻辑的通信检查。
+
+## 保存地图
 
 ```bash
 source scripts/activate_g1_real.sh
-ros2 topic info /api/sport/request
-ros2 topic info /api/sport/response
+mkdir -p maps
+ros2 run nav2_map_server map_saver_cli -f "$PWD/maps/g1_map" --ros-args \
+  -r map:=/g1_real/map -p use_sim_time:=false
 ```
 
-现场曾出现 request 的 Subscription count 和 response 的 Publisher count 都为 0，
-而原厂 CheckMode 返回 `{"form":"0","name":""}`。
-当时原厂运动模式未恢复，但传感器仍正常发布。
-应退出低层程序并按宇树官方流程恢复原厂控制，确认原厂遥控器正常后重启导航。
-
-**`fsm=801`、旧版入口拒绝放行：**
-早期代码仅允许 500。当前版本支持 `[500, 801]`；修改文件后需要重启入口才会加载。
-查看状态中的 `allowed_fsm_ids` 和放行服务的具体拒绝原因。
-0、1、4 及未知 FSM 不会因加入 801 而被放行。
-
-**`command watchdog: stop`：**
-表示没有新的速度指令，桥在保持零速；不代表放行失败。
-执行模式下在 RViz 重新选择附近目标，检查规划结果和 Nav2 日志。
-默认预览模式只产生青色预览路径，不会驱动机器人。
-
-**旧地图还在但传感器不更新：**
-检查状态中的数据年龄、`clock_fault` 和 `cloud_time_valid`。
-换网卡／地址后重新启动入口；不能仅凭 RViz 留存画面判断链路正常。
-
-## 保存与检查
-
-当前入口运行在线 SLAM；保存地图不会自动切换到 AMCL，暂无旧地图定位启动入口。
-可用默认禁止运动模式运行 `python scripts/check_g1_real.py`，
-只计算附近路径、保存局部地图和报告至 `.cache-g1/validation/stationary/`。
-它不会发送 NavigateToPose；若桥已允许运动，该静止验收检查不会判为通过。
-
-离线测试：`python3 scripts/test_g1_real_guards.py`。
-ROS 回归测试：激活实机环境后运行 `python scripts/test_g1_real_ros.py`，
-脚本强制回环网卡及独立 Domain 119，以模拟服务验证 500／801 放行、非法 FSM 拒绝、
-速度请求、零速解除放行、目标取消和 RViz 模式话题，不连接真实机器人。
+传感器使用常量时钟偏移映射到 ROS 墙钟，保留传感器之间的时间差。
+TF 中的 `robot_center / pelvis` 关系与地面参考使用名义 URDF，换机器人后应核对安装标定。

@@ -19,7 +19,7 @@ if ((process / 'cwd').resolve() != root or b'launch' not in args
         or b'navigation/g1_real_navigation.launch.py' not in args):
     raise SystemExit('PID does not identify this workspace navigation launch; left untouched.')
 os.kill(pid, signal.SIGINT)
-print('Stopping this G1 navigation launch. Original robot controller remains running.')
+print('Stopping this G1 navigation launch and its selected locomotion process.')
 PY
 fi
 # The lock stays open across exec and is released when this launch exits.
@@ -47,5 +47,9 @@ if ! robot_address_lines=$(awk -v expected="$G1_ROBOT_ADDRESS" '
     exit 1
 fi
 printf '%s\n' "$robot_address_lines"
+if [[ -z "${G1_ROBOT_INTERFACE:-}" ]]; then
+    G1_ROBOT_INTERFACE=$(awk 'NR==1 {print $2}' <<< "$robot_address_lines")
+fi
+export G1_ROBOT_INTERFACE
 printf '%s\n' "$$" > .cache-g1/real-runtime/launch.pid
 exec ros2 launch navigation/g1_real_navigation.launch.py "$@"

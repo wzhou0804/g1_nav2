@@ -6,7 +6,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 fi
 _g1_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [[ ! -f /opt/ros/humble/setup.bash || ! -f "$_g1_root/.venv-g1-nav/bin/activate" ]]; then
-    echo "Missing ROS 2 Humble or .venv-g1-nav; see README.md and run scripts/setup_g1_real.sh." >&2
+    echo "Missing ROS 2 Humble or .venv-g1-nav; run scripts/setup_g1_real.sh first." >&2
     unset _g1_root
     return 1
 fi

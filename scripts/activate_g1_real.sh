@@ -6,9 +6,7 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
 fi
 _g1_real_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export PYTHONNOUSERSITE=1
-if ! source "$_g1_real_root/scripts/activate_g1_nav.sh"; then
-    return 1
-fi
+source "$_g1_real_root/scripts/activate_g1_nav.sh"
 _g1_cyclone="$_g1_real_root/.cache-g1/ros-cyclone/root/opt/ros/humble"
 if [[ ! -f "$_g1_cyclone/lib/librmw_cyclonedds_cpp.so" ]]; then
     echo 'Missing local Cyclone ROS middleware; run scripts/setup_g1_real.sh.' >&2

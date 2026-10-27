@@ -1,17 +1,22 @@
 # 来源与许可
 
-- 本项目从 [abizovnuralem/go2_omniverse](https://github.com/abizovnuralem/go2_omniverse)
-  开发工作区提取 G1 实机导航集成；保留原仓库 BSD-2-Clause [LICENSE](LICENSE)。
-  提取时原仓库基础提交为 `db18970`，实机导航为其后开发的独立模块。
-- `navigation/config/nav2.yaml` 基于 Nav2 Humble 的
-  [`nav2_bringup/params/nav2_params.yaml`](https://github.com/ros-navigation/navigation2/blob/humble/nav2_bringup/params/nav2_params.yaml)
-  修改命名空间、墙钟、速度、代价地图和行为配置。Nav2 为 Apache-2.0，
-  保留相应许可文本于 `LICENSES/Apache-2.0.txt`。
-- `navigation/config/slam.yaml` 基于 SLAM Toolbox Humble 的
-  [`config/mapper_params_online_async.yaml`](https://github.com/SteveMacenski/slam_toolbox/blob/humble/config/mapper_params_online_async.yaml)
-  修改命名空间、墙钟、传感器范围和建图参数；该项目声明 LGPL，见 `LICENSES/slam_toolbox-LICENSE`。
-- 安装脚本从官方 [unitreerobotics/unitree_ros2](https://github.com/unitreerobotics/unitree_ros2)
-  固定提交下载并编译 `unitree_api`、`unitree_hg` 消息。第三方源码／二进制不随本仓库分发，
-  缓存在被忽略的 `.cache-g1/` 中；各依赖保留其上游许可。
+- 集成代码提取自 [abizovnuralem/go2_omniverse](https://github.com/abizovnuralem/go2_omniverse)
+  开发工作区，基础提交 `db18970`，保留 BSD-2-Clause [LICENSE](LICENSE)。
+- Nav2 配置参考官方 Humble `nav2_bringup/params/nav2_params.yaml`（Apache-2.0），
+  许可位于 `LICENSES/Apache-2.0.txt`。SLAM Toolbox 配置参考官方
+  `config/mapper_params_online_async.yaml`，许可位于 `LICENSES/slam_toolbox-LICENSE`。
+- OpenHomie 原始 ONNX、观测契约与部署参数来自
+  [InternRobotics/OpenHomie](https://github.com/InternRobotics/OpenHomie)，固定提交
+  `33071f79f1884bb122bd45631c8c60d61dac1eb8`。
+  对应上游声明 CC BY-NC 4.0，保留 [原许可](LICENSES/OpenHomie-LICENSE)。
+  本项目编写了 Python ONNX／MuJoCo／ROS 接口与速度补偿，未改训练权重。
+  原始权重、源码和网格由安装脚本从上游获取，不随 Git 仓库提交。
+- 官方 Python SDK（BSD-3-Clause）固定提交
+  `814556d15970dd2ecf1c9984e845ca02ab07e206`，保留
+  [SDK 许可](LICENSES/Unitree-SDK-BSD-3-Clause.txt)。
+- 官方 ROS 消息来自 `unitreerobotics/unitree_ros2` 固定提交
+  `668d1ec5a05d1c38d3306bdca7d59f2ba3581a88`；官方锁腰模型来自
+  `unitreerobotics/unitree_ros` 固定提交 `15ebe53f4cd77e7d745ae83b9d7ff90e685e8998`。
+  第三方下载保留其上游许可，均缓存于 `.cache-g1/`。
 
-本仓库不分发预训练策略、机器人模型资产、ROS 二进制或现场地图。
+本仓库不分发预训练权重、机器人网格、ROS 二进制或现场地图。

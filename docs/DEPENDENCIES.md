@@ -35,5 +35,34 @@ colcon、CMake 及 Python YAML／NumPy／Pillow 等依赖，需要 sudo。
 - `G1_ROBOT_ADDRESS=192.168.123.222`，可替换为电脑端机器人子网地址。
 - `CYCLONEDDS_URI` 绑定该地址，允许机器人子网 DDS 发现。
 
-因此不需要手动激活仿真环境，也不需要安装 Python Unitree SDK。
+使用原厂执行端时无需 Python Unitree SDK。默认 OpenHomie 通过下方独立环境安装 SDK。
 首次配置后，后续启动和离线测试使用本地缓存即可。
+
+## OpenHomie CPU 策略环境
+
+`bash scripts/setup_g1_homie.sh` 创建 `.venv-g1-deploy`，不继承 ROS 或 Isaac Sim。
+`create_g1_venv.sh` 用系统 Python/pip 和固定 `pip==25.2` wheel 引导，无需旧仿真 venv。
+系统 pip 由 `install_g1_nav_deps.sh` 安装。
+
+| 依赖 | 固定版本／提交 |
+| --- | --- |
+| NumPy / PyYAML | 1.26.4 / 6.0.3 |
+| ONNX Runtime CPU | 1.23.2 |
+| Python CycloneDDS | 0.10.2，独立于 ROS 的 0.10.5 |
+| OpenCV（官方 SDK 元数据依赖） | 4.11.0.86 |
+| 官方 Python SDK | `814556d15970dd2ecf1c9984e845ca02ab07e206` |
+| OpenHomie | `33071f79f1884bb122bd45631c8c60d61dac1eb8` |
+| 官方锁腰 URDF／网格 | `15ebe53f4cd77e7d745ae83b9d7ff90e685e8998` |
+| 原始 ONNX SHA-256 | `afe6363c83c8b9ab8b1a2fed598fce7de35ff045eee1a95b336fd6720e3d3d49` |
+
+安装器下载 SDK、OpenHomie 与官方模型至 `.cache-g1/`；不安装 PyTorch，也不编译 SDK 的运动示例。
+`run_g1_homie.sh` 清理 ROS/Isaac 路径后调用独立 CPU Python，内部复用 `run_g1_student.sh`。
+
+## MuJoCo（可选）
+
+`bash scripts/setup_g1_mujoco.sh` 创建 `.venv-g1-mujoco`。
+主要版本：MuJoCo 3.2.3、ONNX Runtime 1.23.2、NumPy 1.26.4、Matplotlib 3.10.3。
+完整直接依赖见根目录 `requirements-g1-mujoco.txt`；运行不需要 ROS、DDS 或物理机器人。
+先运行 OpenHomie 安装器获取策略与模型，再执行 MuJoCo 测试。
+主线安装验证时的完整 pip 包清单见 `docs/environment-versions.json`；它记录传递依赖，
+直接安装约束分别在两个 requirements 文件中。

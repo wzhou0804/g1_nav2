@@ -10,7 +10,7 @@ class VelocityGate:
     last_command: float = -math.inf
     command: tuple = (0.0, 0.0, 0.0)
     output: tuple = (0.0, 0.0, 0.0)
-    limits: tuple = (0.15, 0.06, 0.25)
+    limits: tuple = (0.3, 0.15, 0.3)
     acceleration: tuple = (0.20, 0.15, 0.40)
     timeout: float = 0.35
     reason: str = 'motion disabled'
