@@ -1,0 +1,101 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Tool Properties
+    Name: Tool Properties
+Visualization Manager:
+  Class: ""
+  Global Options:
+    Background Color: 28; 32; 38
+    Fixed Frame: g1_real/map
+    Frame Rate: 20
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 1
+      Plane Cell Count: 40
+    - Class: rviz_default_plugins/Map
+      Name: Live SLAM Map
+      Enabled: true
+      Topic:
+        Value: /g1_real/map
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+      Alpha: 0.85
+      Color Scheme: map
+    - Class: rviz_default_plugins/PointCloud2
+      Name: Real MID360
+      Enabled: true
+      Topic:
+        Value: /g1_real/points
+        Reliability Policy: Best Effort
+      Style: Points
+      Size (Pixels): 2
+      Decay Time: 0.5
+      Color Transformer: AxisColor
+      Axis: Z
+      Use Fixed Frame: true
+    - Class: rviz_default_plugins/LaserScan
+      Name: Navigation Scan
+      Enabled: true
+      Topic:
+        Value: /g1_real/scan
+        Reliability Policy: Best Effort
+      Size (Pixels): 3
+      Color Transformer: FlatColor
+      Color: 255; 100; 70
+    - Class: rviz_default_plugins/Path
+      Name: Preview Path (not executed)
+      Enabled: true
+      Topic:
+        Value: /g1_real/preview_path
+        Durability Policy: Transient Local
+        Reliability Policy: Reliable
+      Color: 60; 210; 255
+      Line Style: Billboards
+      Line Width: 0.06
+    - Class: rviz_default_plugins/Path
+      Name: Planned Path
+      Enabled: true
+      Topic:
+        Value: /g1_real/plan
+      Color: 40; 230; 100
+      Line Style: Billboards
+      Line Width: 0.06
+    - Class: rviz_default_plugins/Odometry
+      Name: Real Odometry
+      Enabled: true
+      Topic:
+        Value: /g1_real/odom
+      Keep: 1
+      Shape: Arrow
+    - Class: rviz_default_plugins/Marker
+      Name: Motion Gate
+      Enabled: true
+      Topic:
+        Value: /g1_real/state_marker
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: false
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/Measure
+    - Class: rviz_default_plugins/SetGoal
+      Topic:
+        Value: /g1_real/preview_goal
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      Distance: 12
+      Pitch: 0.95
+      Yaw: 0.8
+      Focal Point: {X: 0, Y: 0, Z: 0.4}
+Window Geometry:
+  Width: 1280
+  Height: 900
